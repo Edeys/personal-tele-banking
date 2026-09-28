@@ -1,7 +1,7 @@
 """Backend Lark Base (tuỳ chọn).
 
 Khác bản cũ ở đúng một chỗ quan trọng: **không hardcode record_id**. Bản cũ
-nhét sẵn `rec27pu7AavcKs` cho từng ngân hàng, nên chỉ chạy được với một người.
+nhét sẵn record_id của từng ngân hàng vào code, nên chỉ chạy được với một người.
 Ở đây "Nguồn tiền" được lookup theo TÊN trong bảng Sổ Quỹ mà user cấu hình
 (`source_table_id` + `source_name_field`); không cấu hình thì ghi tên dạng text.
 """
