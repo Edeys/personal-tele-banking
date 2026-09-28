@@ -1,0 +1,19 @@
+[Unit]
+Description=Tele-Banking Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/tele-banking
+EnvironmentFile=/opt/tele-banking/.env
+ExecStart=/opt/tele-banking/venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+# Bảo mật cơ bản
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

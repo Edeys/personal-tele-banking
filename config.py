@@ -33,6 +33,7 @@ def default_config() -> dict:
         "bot_name": DEFAULT_BOT_NAME,
         "sources": [],
         "categories": {},
+        "income_groups": [],
         "family": [],
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
@@ -113,6 +114,13 @@ class Config:
     @property
     def family(self) -> list[dict]:
         return list(self.data.get("family") or [])
+
+    @property
+    def income_groups(self) -> list[str]:
+        return list(self.data.get("income_groups") or [])
+
+    def is_income(self, group: str) -> bool:
+        return bool(group) and group in (self.data.get("income_groups") or [])
 
     def group_names(self) -> list[str]:
         return list(self.categories.keys())
