@@ -25,6 +25,37 @@ MAX_TOKENS = 1500
 RECEIPT_MAX_EDGE = 1600
 RECEIPT_JPEG_QUALITY = 88
 
+
+def _probe_png() -> bytes:
+    """Ảnh 160x48 nhỏ để test model có nhận input ảnh hay không."""
+    from PIL import ImageDraw
+
+    img = Image.new("RGB", (160, 48), "white")
+    ImageDraw.Draw(img).text((10, 16), "45.000 VND", fill="black")
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _human_llm_error(exc: Exception, model: str) -> str:
+    """Dịch lỗi endpoint LLM thành việc người dùng phải làm trong .env."""
+    text = str(exc)
+    low = text.lower()
+    if "image" in low and any(k in low for k in ("support", "accept", "content_type", "invalid")):
+        return (
+            f"Model {model} không đọc được ảnh — đổi LLM_OCR_MODEL sang model vision "
+            "(ví dụ qwen/qwen2.5-vl-72b-instruct)."
+        )
+    if "401" in low or "unauthorized" in low or "invalid api key" in low:
+        return "LLM_API_KEY sai hoặc tài khoản chưa nạp tiền."
+    if "404" in low or ("model" in low and "not found" in low):
+        return f"Không tìm thấy model {model} — kiểm tra lại LLM_OCR_MODEL."
+    if "timeout" in low or "timed out" in low:
+        return f"Model {model} phản hồi chậm — thử lại, hoặc đổi sang model nhanh hơn."
+    if "connection" in low or "name or service" in low or "max retries" in low:
+        return "Không gọi được LLM_BASE_URL — kiểm tra lại địa chỉ endpoint."
+    return text[:300]
+
 _PROMPT_TEMPLATE = """Đọc ảnh giao dịch, trả JSON CHÍNH XÁC:
 
 BANKING: {{"loai":"banking","ngay_thang":"DD/MM/YYYY","thoi_gian":"HH:MM","ngan_hang_gui":"","ngan_hang_nhan":"","nguoi_nhan":"","stk_nhan":"","so_tien":2000000,"ma_giao_dich":"","noi_dung":"","ghi_chu":"","danh_muc_lon":"","nhom_chi_phi":""}}
@@ -196,7 +227,28 @@ class OCRExtractor:
     def refresh_prompt(self) -> None:
         self._prompt = build_prompt(self.config.categories if self.config else {})
 
-    def _call_sdk(self, content) -> str:
+    def ping(self, timeout: float = 30) -> str | None:
+        """Gọi model 1 lần với ảnh nhỏ. `None` = endpoint/key/model đều chạy.
+
+        Khác với `extract`: không validate kết quả, chỉ muốn biết endpoint
+        có trả lời và model có nhận input ảnh hay không. Dùng cho preflight
+        lúc khởi động và cho lệnh `/test`.
+        """
+        try:
+            data_uri = self._prepare(_probe_png())
+            raw = self._call_sdk(
+                [
+                    {"type": "text", "text": "Trả về đúng một chữ: OK"},
+                    {"type": "image_url", "image_url": {"url": data_uri}},
+                ],
+                timeout=timeout,
+            )
+        except Exception as e:
+            logger.warning("OCR ping failed: %s", str(e)[:200])
+            return _human_llm_error(e, self.model)
+        return None if (raw or "").strip() else "Model nhận ảnh nhưng không trả lời."
+
+    def _call_sdk(self, content, timeout: float | None = None) -> str:
         kwargs = dict(
             model=self.model,
             messages=[
@@ -204,7 +256,7 @@ class OCRExtractor:
                 {"role": "user", "content": content},
             ],
             max_tokens=MAX_TOKENS,
-            timeout=API_TIMEOUT,
+            timeout=timeout or API_TIMEOUT,
         )
         try:
             resp = self.client.chat.completions.create(temperature=0.0, **kwargs)

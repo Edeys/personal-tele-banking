@@ -1,6 +1,7 @@
 from backends import base
 from backends.lark import LarkBackend, _fmt_date
 from backends.sheets import TAB_IN, TAB_OUT, SheetsBackend
+import requests
 
 
 class FakeConfig:
@@ -112,7 +113,7 @@ def test_sheets_append_sends_secret_and_row(monkeypatch):
 
     monkeypatch.setattr("backends.sheets.requests.post", fake_post)
     backend = SheetsBackend("https://script", "s3cr3t", FakeConfig())
-    assert backend.append(BANK_TXN) is True
+    assert backend.append(BANK_TXN) is None
     assert captured["json"]["secret"] == "s3cr3t"
     assert captured["json"]["action"] == "append"
     assert captured["json"]["tab"] == TAB_OUT
@@ -147,12 +148,78 @@ def test_sheets_sets_source_and_receipt(monkeypatch):
     assert imaging.calls == ["An uong"]
 
 
-def test_sheets_append_returns_false_on_error(monkeypatch):
+def test_sheets_append_returns_human_readable_reason(monkeypatch):
+    """Lỗi phải nói được việc cần làm — người dùng không đọc được log."""
     monkeypatch.setattr(
         "backends.sheets.requests.post",
         lambda url, json=None, timeout=None: FakeResp({"ok": False, "error": "sai secret"}),
     )
-    assert SheetsBackend("https://script", "s", FakeConfig()).append(BANK_TXN) is False
+    err = SheetsBackend("https://script", "s", FakeConfig()).append(BANK_TXN)
+    assert err is not None
+    assert isinstance(err, str)
+    assert "SHEETS_WEBAPP_SECRET" in err
+
+
+def test_sheets_append_maps_403_to_access_hint(monkeypatch):
+    monkeypatch.setattr(
+        "backends.sheets.requests.post",
+        lambda url, json=None, timeout=None: FakeResp({"ok": False}, status=403),
+    )
+    err = SheetsBackend("https://script", "s", FakeConfig()).append(BANK_TXN)
+    assert "Anyone" in err
+
+
+def test_sheets_healthcheck_ok(monkeypatch):
+    monkeypatch.setattr(
+        "backends.sheets.requests.post",
+        lambda url, json=None, timeout=None: FakeResp({"ok": True, "rows": []}),
+    )
+    assert SheetsBackend("https://script", "s", FakeConfig()).healthcheck() is None
+
+
+def test_sheets_healthcheck_reports_bad_secret(monkeypatch):
+    monkeypatch.setattr(
+        "backends.sheets.requests.post",
+        lambda url, json=None, timeout=None: FakeResp({"ok": False, "error": "sai secret"}),
+    )
+    err = SheetsBackend("https://script", "s", FakeConfig()).healthcheck()
+    assert err and "SHEETS_WEBAPP_SECRET" in err
+
+
+def test_sheets_healthcheck_missing_env():
+    assert "SHEETS_WEBAPP_URL" in SheetsBackend("", "", FakeConfig()).healthcheck()
+    assert "SHEETS_WEBAPP_SECRET" in SheetsBackend("https://x", "", FakeConfig()).healthcheck()
+
+
+def test_sheets_read_retries_transient_error(monkeypatch):
+    calls = {"n": 0}
+    sleeps = []
+
+    def flaky(url, json=None, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise requests.exceptions.ConnectionError("connection reset")
+        return FakeResp({"ok": True, "rows": []})
+
+    monkeypatch.setattr("backends.sheets.requests.post", flaky)
+    monkeypatch.setattr("backends.sheets.time.sleep", lambda s: sleeps.append(s))
+    assert SheetsBackend("https://script", "s", FakeConfig()).healthcheck() is None
+    assert calls["n"] == 2
+    assert sleeps
+
+
+def test_sheets_append_does_not_auto_retry(monkeypatch):
+    """Append mà retry sẽ tạo dòng trùng khi Google đã nhận request rồi."""
+    calls = {"n": 0}
+
+    def flaky(url, json=None, timeout=None):
+        calls["n"] += 1
+        raise requests.exceptions.ConnectionError("connection reset")
+
+    monkeypatch.setattr("backends.sheets.requests.post", flaky)
+    err = SheetsBackend("https://script", "s", FakeConfig()).append(BANK_TXN)
+    assert isinstance(err, str)
+    assert calls["n"] == 1
 
 
 def test_sheets_get_recent(monkeypatch):
@@ -223,3 +290,31 @@ def test_lark_source_falls_back_to_text(monkeypatch):
     backend = _lark(monkeypatch, config=FakeConfig(sources=["VCB - 046"]))
     fields = backend._fields(BANK_TXN, None)
     assert fields["Tài khoản/Quỹ"] == "VCB - 046"
+
+
+def test_lark_append_returns_none_on_success(monkeypatch):
+    def fake_post(url, *a, **k):
+        if "tenant_access_token" in str(url):
+            return FakeResp({"code": 0, "tenant_access_token": "tok"})
+        return FakeResp({"code": 0})
+
+    monkeypatch.setattr("backends.lark.requests.post", fake_post)
+    assert LarkBackend("id", "secret", "app", "tbl", FakeConfig()).append(BANK_TXN) is None
+
+
+def test_lark_append_returns_reason_on_reject(monkeypatch):
+    def fake_post(url, *a, **k):
+        if "tenant_access_token" in str(url):
+            return FakeResp({"code": 0, "tenant_access_token": "tok"})
+        return FakeResp({"code": 99991663, "msg": "TableNameNotFound"})
+
+    monkeypatch.setattr("backends.lark.requests.post", fake_post)
+    err = LarkBackend("id", "secret", "app", "tbl", FakeConfig()).append(BANK_TXN)
+    assert isinstance(err, str) and err
+
+
+def test_lark_healthcheck_reports_missing_ids():
+    backend = object.__new__(LarkBackend)
+    backend.app_token = ""
+    backend.table_id = ""
+    assert "LARK_APP_TOKEN" in backend.healthcheck()

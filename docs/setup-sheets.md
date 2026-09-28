@@ -118,13 +118,26 @@ SHEETS_WEBAPP_SECRET=doi-thanh-chuoi-bi-mat-cua-ban
 
 ## 6. Kiểm tra
 
+**Cách dễ nhất:** mở Telegram, gõ `/test` với bot. Dòng đầu phải là
+`✅ Sổ (backend): OK`. Nếu là ❌ thì đọc đúng lý do in ra — nó chỉ đúng chỗ
+cần sửa.
+
+**Cách tự kiểm tra bằng tay** — mở Terminal (macOS/Linux) hoặc Command
+Prompt (Windows), dán đoạn dưới và **thay 2 chỗ** cho đúng của bạn:
+
 ```bash
-curl -s -X POST "$SHEETS_WEBAPP_URL" \
+curl -s -X POST "https://script.google.com/macros/s/AKfy.../exec" \
   -H 'Content-Type: application/json' \
-  -d '{"secret":"doi-thanh-chuoi-bi-mat-cua-ban","action":"recent","limit":5}'
+  -d '{"secret":"so-thu-chi-2026-abcxyz","action":"recent","limit":5}'
 ```
 
+- `"https://script.google.com/macros/s/AKfy.../exec"` → URL bạn copy ở **bước 4**
+- `"so-thu-chi-2026-abcxyz"` → chuỗi `SECRET` bạn đặt ở **bước 3**
+
 Kết quả mong đợi: `{"ok":true,"rows":[]}`.
+
+> Lưu ý: không thay 2 chỗ trên mà copy y nguyên thì sẽ báo lỗi —
+> biến `$SHEETS_WEBAPP_URL` không tồn tại trong terminal của bạn.
 
 Sau đó gửi thử 1 ảnh biên lai cho bot → bấm **Duyệt** → mở Sheet, phải thấy tab
 `Tiền chuyển` (hoặc `Tiền nhận`) với 1 dòng mới.
@@ -165,3 +178,5 @@ Muốn ảnh hiển thị thẳng trong ô: thêm cột phụ với công thức
 | Bot báo lỗi khi ghi, log có HTTP 401/403 | **Who has access** chưa đặt là `Anyone` |
 | Sửa script nhưng bot vẫn chạy bản cũ | Phải **Deploy → Manage deployments → Edit → New version** — sửa code không tự cập nhật Web App |
 | Không thấy dòng nào trong Sheet | Kiểm tra biến `SHEETS_WEBAPP_URL` có đuôi `/exec` (không phải `/dev`) |
+| Bot từ chối khởi động, báo "Sổ (backend) chưa dùng được" | Bot đã tự kiểm tra và thất bại — làm theo đúng lý do in ra, sửa `.env` rồi chạy lại `python main.py` |
+| Bấm **Duyệt** báo lỗi nhưng ảnh vẫn còn | Bot cố tình giữ giao dịch lại — sửa lý do được nêu rồi bấm **Duyệt** lần nữa |
