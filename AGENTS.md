@@ -5,7 +5,7 @@
 > code** — agent chịu trách nhiệm hỏi đúng thứ, tạo đúng resource, verify rồi
 > mới báo xong.
 >
-> Trạng thái: **đang rebuild**. Thiết kế + quyết định đã chốt ở
+> Trạng thái: **v1 chạy được**, 68 test. Thiết kế + quyết định ở
 > [`docs/specs/2026-09-28-tele-banking-design.md`](docs/specs/2026-09-28-tele-banking-design.md).
 
 ## Sản phẩm
@@ -25,9 +25,10 @@ vision → user bấm nút xác nhận → ghi vào **Google Sheets của chính
    `["VCB", "MB", "TCB"]` trong code → dừng lại, đó là bug.
 3. **Nguồn sự thật là `config.py` + `data/config.json`.** Đừng thêm bảng map
    song song trong module khác.
-4. **Người dùng không đọc được code.** Mọi hướng dẫn phải ở dạng "bấm vào
-   đâu, dán gì, copy gì". Nếu một bước bắt user tự suy luận kỹ thuật thì bước
-   đó đang sai.
+4. **Người dùng không đọc được code, không đọc được log.** Mọi hướng dẫn phải
+   ở dạng "bấm vào đâu, dán gì, copy gì". Lỗi phải trả về **việc cần làm**
+   bằng tiếng Việt chứ không phải stacktrace. Nếu một bước bắt user tự suy
+   luận kỹ thuật thì bước đó đang sai.
 
 ## Việc agent cần lấy từ user khi setup
 
@@ -39,31 +40,69 @@ vision → user bấm nút xác nhận → ghi vào **Google Sheets của chính
 | 4 | (tuỳ chọn) Lark Base | Theo `docs/setup-lark.md` | Khó — chỉ khi user yêu cầu |
 
 Sau khi có 1–3: điền `.env` → `pip install -r requirements.txt` → chạy
-`python main.py` → user gõ `/start` trong bot để hoàn tất wizard (nguồn tiền,
-nhóm chi tiêu, hạng mục con, thành viên).
+`python main.py`.
+
+**Bot tự kiểm tra trước khi nhận việc**: `main.py` gọi thử backend và thử đọc
+1 ảnh bằng model OCR. Sai URL / sai secret / sai model → bot **từ chối chạy**
+và in đúng việc phải sửa. Không cần bạn tự đoán.
+
+Xong bước đó mới bảo user mở Telegram gõ `/start` để hoàn tất wizard (nguồn
+tiền, nhóm chi tiêu, hạng mục con, thành viên).
+
+## Lệnh trong bot
+
+| Lệnh | Việc |
+|---|---|
+| `/start` | Chạy wizard cấu hình (lần đầu) hoặc chào |
+| `/setup` | Chạy lại wizard từ đầu để sửa cấu hình |
+| `/config` | In cấu hình hiện tại (chỉ đọc) |
+| `/test` | Kiểm tra lại nối Sổ + model đọc ảnh, báo ✅/❌ ngay trong chat |
+| `/invite 123` | Admin thêm thành viên theo ID (không cần chạy lại wizard) |
+| `/myid` | In ID Telegram (để đưa cho admin mời) |
 
 ## Kiến trúc (theo spec)
 
 ```
-main.py            entrypoint: load .env + Config, khởi tạo backend + bot
+main.py            entrypoint: load .env + Config, preflight backend/OCR, chạy polling
 config.py          runtime config (data/config.json) — wizard ghi, mọi module đọc
-onboarding.py      wizard /start lần đầu + /setup + /myid
+onboarding.py      wizard /start lần đầu + summary_text/config_text
 keyboards.py       dựng inline keyboard TỪ config (không hardcode)
-bot.py             handlers: photo → queue → OCR → confirm → save
-ocr.py             LLM vision + _extract_json/_normalize/_validate (prompt động theo config)
+bot.py             handlers: photo → queue → OCR → confirm → save; /test /config /invite
+ocr.py             LLM vision + _extract_json/_normalize/_validate + ping() (prompt động theo config)
 imaging.py         chuỗi lưu ảnh: catbox → telegraph → webdav → local
 anomaly.py         rule-based cảnh báo bất thường theo nhóm cấu hình
-backends/base.py   Protocol: append(txn, image_bytes) / get_recent(n) / summarize_recent(rows)
+backends/base.py   Protocol: append → str|None / get_recent / summarize_recent / healthcheck
 backends/sheets.py Google Sheets qua Apps Script Web App (HTTP, không gspread)
 backends/lark.py   Lark Base (tuỳ chọn), lookup record theo TÊN, không recID
 ```
 
+### Hợp đồng backend — đọc kỹ trước khi sửa
+
+- `append(txn, image_bytes)` trả **`None` nếu ghi được, ngược lại trả lý do
+  bằng tiếng Việt.** `bot.py` dựa vào đó để **giữ giao dịch lại** và cho bấm
+  thử lại. Đừng đổi về `bool` — sẽ làm người dùng mất biên lai.
+- `healthcheck()` trả `str | None`, dùng cho preflight lúc khởi động.
+- `append` **không tự retry**: nếu Google đã nhận request mà mất kết nối trước
+  khi trả lời, retry sẽ tạo dòng trùng trong sổ. Thao tác **đọc** thì có retry
+  (idempotent, `READ_ATTEMPTS`).
+
 ## Verify trước khi báo xong
 
-- `python -m pytest -q` — tất cả pass
-- `python -m py_compile main.py config.py onboarding.py keyboards.py bot.py ocr.py imaging.py anomaly.py backends/*.py`
-- Chạy thật: `/start` → wizard xong → gửi 1 ảnh biên lai → bấm Duyệt → mở
-  Google Sheet kiểm tra có đúng 1 dòng mới + link ảnh mở được.
+1. `python -m pytest -q` — tất cả pass
+2. `python -m py_compile main.py config.py onboarding.py keyboards.py bot.py ocr.py imaging.py anomaly.py backends/*.py`
+3. `python main.py` — phải thấy `Kiểm tra backend: OK` và
+   `Kiểm tra model đọc ảnh: OK`. Nếu bot từ chối chạy thì **lỗi trong .env**,
+   sửa theo đúng dòng nó in ra.
+4. Chạy thật: `/start` → wizard xong → gõ `/test` (2 dòng ✅) → gửi 1 ảnh biên
+   lai → bấm Duyệt → mở Google Sheet kiểm tra có đúng 1 dòng mới + link ảnh
+   mở được.
+5. Kiểm tra không có secret nào trong diff: `git diff` rồi tìm token/key/URL.
+
+## Chạy 24/7 (tuỳ chọn, khi user có VPS)
+
+`README.md` mục "Chạy liên tục trên VPS". Script `deploy/deploy.sh` parameterise
+qua `DEPLOY_HOST`/`REMOTE_DIR`/`SSH_KEY`; `deploy/tele-banking.service` là unit
+mẫu cho systemd. Không có host nào hardcode trong repo.
 
 ## Tài liệu
 

@@ -75,8 +75,15 @@ Wizard `/start` sinh ra. Ví dụ:
 | `income_groups` | Nhóm nào ghi vào tab `Tiền nhận` thay vì `Tiền chuyển` |
 | `family` | Thành viên dùng chung; tự thêm vào `allowed_users` |
 
-Muốn sửa: gõ `/setup` trong bot, **đừng sửa tay** — sửa tay dễ làm JSON hỏng và
-bot sẽ quay về mặc định.
+Muốn sửa danh mục/nguồn tiền: gõ `/setup` trong bot, **đừng sửa tay** — sửa tay
+dễ làm JSON hỏng và bot sẽ quay về mặc định.
+
+| Việc | Lệnh |
+|---|---|
+| Xem cấu hình hiện tại | `/config` |
+| Sửa danh mục / nguồn tiền / thành viên | `/setup` (chạy lại wizard từ đầu) |
+| Thêm 1 thành viên mà không phải chạy lại wizard | `/invite 123456789` (admin) |
+| Kiểm tra nối Sổ + model đọc ảnh | `/test` |
 
 Sửa `data/config.json` xong thì không cần khởi động lại bot: wizard lưu thẳng
 vào object đang chạy và làm mới prompt OCR.

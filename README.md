@@ -11,7 +11,7 @@ vision → bạn bấm **Duyệt** → bot ghi vào **Google Sheet của chính 
 - **Không hardcode dữ liệu của ai.** Nguồn tiền, nhóm chi tiêu, hạng mục con,
   thành viên — bạn tự khai trong bot bằng `/start`.
 
-> Trạng thái: v1, đang phát triển. Lark Base là backend tuỳ chọn.
+> Trạng thái: v1, 68 test. Lark Base là backend tuỳ chọn.
 
 ## Bot làm được gì
 
@@ -40,14 +40,28 @@ Mở repo này bằng agent của bạn và dán:
 
 Agent sẽ hỏi bạn 3 thứ (token Telegram, LLM key, Web App URL) rồi tự cài đặt.
 
+Bot **tự kiểm tra trước khi nhận việc** — thiếu/sai bất kỳ thứ gì trong `.env`
+là nó từ chối chạy và in đúng dòng phải sửa, thay vì để bạn gửi ảnh xong mới
+phát hiện lỗi.
+
 ## Cách 2 — tự làm
 
 ```bash
-git clone <repo> && cd tele-banking
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+git clone https://github.com/Edeys/personal-tele-banking.git && cd personal-tele-banking
+python -m venv .venv
+# Windows:   .venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env      # rồi điền 5 dòng bắt buộc (xem dưới)
+cp .env.example .env      # Windows: copy .env.example .env
+# rồi điền 5 dòng bắt buộc (xem dưới)
 python main.py
+```
+
+Thấy 2 dòng này là ổn:
+
+```
+Kiểm tra backend: OK
+Kiểm tra model đọc ảnh: OK
 ```
 
 Điền `.env` (xem chú thích ngay trong file):
@@ -62,17 +76,43 @@ SHEETS_WEBAPP_SECRET=...
 ```
 
 Sau đó mở Telegram, chat với bot và gõ `/start` → wizard hỏi 5 bước.
+Xong wizard gõ `/test` → phải thấy 2 dòng ✅.
 
 ## Lệnh trong bot
 
 | Lệnh | Việc |
 |---|---|
 | `/start` | Chạy wizard cấu hình (lần đầu) hoặc chào |
-| `/setup` | Mở lại wizard để sửa cấu hình |
-| `/myid` | In ID Telegram của bạn (để thêm thành viên) |
+| `/setup` | Chạy lại wizard từ đầu để sửa cấu hình |
+| `/config` | Xem cấu hình hiện tại (chỉ đọc) |
+| `/test` | Kiểm tra nối Sổ + model đọc ảnh, báo ✅/❌ ngay trong chat |
+| `/invite 123` | Thêm thành viên theo ID, không phải chạy lại wizard |
+| `/myid` | In ID Telegram của bạn (để đưa cho admin mời) |
 
 Gửi tin nhắn văn bản bất kỳ → hỏi trợ lý về chi tiêu. Đang ở màn xác nhận thì
 gõ `lưu` hoặc `bỏ qua` cũng được.
+
+Nếu bấm **Duyệt** mà báo lỗi, bot **giữ lại giao dịch** và nêu đúng lý do
+(sai secret, sai URL, hết tiền LLM…) — bạn bấm **Duyệt** lần nữa để thử lại,
+không mất ảnh.
+
+## Chạy liên tục trên VPS
+
+Bot phải chạy 24/7 thì mới nhận được ảnh. Trên máy cá nhân thì mở terminal
+bật `python main.py` và để đó là được.
+
+Trên VPS Linux có sẵn `deploy/`:
+
+```bash
+# máy bạn đẩy code lên server rồi cài systemd
+DEPLOY_HOST=root@1.2.3.4 REMOTE_DIR=/opt/tele-banking ./deploy/deploy.sh
+```
+
+`deploy/tele-banking.service` là unit mẫu — copy vào
+`/etc/systemd/system/`, sửa `WorkingDirectory` nếu bạn đặt chỗ khác, rồi
+`systemctl enable --now tele-banking`. Xem log: `journalctl -u tele-banking -f`.
+
+`.env` phải nằm trong thư mục đó (script sẽ cảnh báo nếu thiếu).
 
 ## Cấu hình
 

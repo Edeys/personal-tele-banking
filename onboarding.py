@@ -168,3 +168,24 @@ def summary_text(config) -> str:
     lines.append("")
     lines.append("Giờ gửi ảnh biên lai / màn hình chuyển khoản để bắt đầu.")
     return "\n".join(lines)
+
+
+def config_text(config) -> str:
+    """Một bản in cấu hình hiện tại, thuần văn bản.
+
+    Không dùng Markdown: tên nhóm/nguồn tiền là do người dùng gõ, có thể
+    chứa ký tự `*`/`_` làm hỏng parse_mode và khiến Telegram báo lỗi.
+    """
+    lines = [f"Thông tin hiện tại — {config.bot_name}", ""]
+    lines.append("Nguồn tiền: " + (", ".join(config.sources) or "(chưa khai)"))
+    lines.append("")
+    lines.append("Nhóm chi tiêu:")
+    for group, subs in config.categories.items():
+        tag = " [thu nhập]" if config.is_income(group) else ""
+        lines.append(f"  • {group}{tag}: " + (", ".join(subs) or "—"))
+    if config.family:
+        lines.append("")
+        lines.append("Thành viên: " + ", ".join(str(m.get("id")) for m in config.family))
+    lines.append("")
+    lines.append("Thành viên dùng chung: " + (", ".join(str(u) for u in (config.data.get("allowed_users") or [])) or "(chỉ mình bạn)"))
+    return "\n".join(lines)

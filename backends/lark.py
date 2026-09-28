@@ -26,6 +26,20 @@ SOURCE_FIELD = "Tài khoản/Quỹ"
 DATE_FIELD = "Ngày giao dịch"
 RECEIPT_FIELD = "Chứng từ/ Hoá đơn"
 API_TIMEOUT = 30
+READ_ATTEMPTS = 3
+
+
+def _human_error(exc: Exception) -> str:
+    """Dịch lỗi Lark thành việc người dùng phải làm (xem setup-lark.md)."""
+    text = str(exc)
+    low = text.lower()
+    if "auth failed" in low:
+        return "Sai LARK_APP_ID / LARK_APP_SECRET (setup-lark.md)."
+    if "404" in low or "not found" in low:
+        return "LARK_APP_TOKEN / LARK_TABLE_ID sai — mở bảng Lark rồi copy đúng ID (setup-lark.md)."
+    if "timeout" in low or "connection" in low:
+        return "Không gọi được Lark (mạng) — thử lại sau ít phút."
+    return text[:300]
 
 
 def _fmt_date(value: str) -> int:
@@ -160,7 +174,38 @@ class LarkBackend:
                 fields[RECEIPT_FIELD] = [{"file_token": token}]
         return fields
 
-    def append(self, txn: dict, image_bytes: bytes | None = None) -> bool:
+    def healthcheck(self) -> str | None:
+        """Đọc thử 1 bản ghi để biết bảng có truy cập được không."""
+        if not self.app_token or not self.table_id:
+            return "Thiếu LARK_APP_TOKEN / LARK_TABLE_ID trong .env (xem docs/setup-lark.md)."
+        try:
+            data = self._records(page_size=1, attempts=READ_ATTEMPTS)
+            if data.get("code") != 0:
+                return _human_error(RuntimeError(data.get("msg") or "Lark trả lỗi"))
+            return None
+        except Exception as e:
+            return _human_error(e)
+
+    def _records(self, page_size: int = 10, attempts: int = 1) -> dict:
+        last: Exception | None = None
+        for attempt in range(1, max(1, attempts) + 1):
+            try:
+                resp = requests.get(
+                    f"{LARK_API}/apps/{self.app_token}/tables/{self.table_id}/records",
+                    headers=self._headers(),
+                    params={"page_size": page_size},
+                    timeout=15,
+                )
+                return resp.json()
+            except Exception as e:
+                last = e
+                if attempt < attempts:
+                    logger.warning("Lark thử lại %d/%d: %s", attempt, attempts, str(e)[:120])
+                    time.sleep(1.0 * attempt)
+        raise last if last else RuntimeError("Lark không trả lời")
+
+    def append(self, txn: dict, image_bytes: bytes | None = None) -> str | None:
+        """Trả None nếu ghi được, ngược lại trả lý do lỗi (tiếng Việt)."""
         try:
             payload = {"fields": self._fields(txn, image_bytes)}
             resp = requests.post(
@@ -172,22 +217,16 @@ class LarkBackend:
             data = resp.json()
             if data.get("code") == 0:
                 logger.info("Lark append OK")
-                return True
+                return None
             logger.error("Lark append failed: %s", data.get("msg"))
-            return False
-        except Exception:
+            return _human_error(RuntimeError(data.get("msg") or "Lark từ chối ghi"))
+        except Exception as e:
             logger.exception("Lark append error")
-            return False
+            return _human_error(e)
 
     def get_recent(self, limit: int = 10) -> list[dict]:
         try:
-            resp = requests.get(
-                f"{LARK_API}/apps/{self.app_token}/tables/{self.table_id}/records",
-                headers=self._headers(),
-                params={"page_size": min(limit, 100)},
-                timeout=15,
-            )
-            data = resp.json()
+            data = self._records(page_size=min(limit, 100), attempts=READ_ATTEMPTS)
             if data.get("code") != 0:
                 logger.warning("Lark get_recent failed: %s", data.get("msg"))
                 return []

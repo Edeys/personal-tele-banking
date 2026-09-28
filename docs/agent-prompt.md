@@ -17,11 +17,13 @@ Hãy đọc `AGENTS.md` trước. Sau đó:
    - Web App URL + secret của Google Sheets (hướng dẫn tôi theo
      `docs/setup-sheets.md`, copy-paste Apps Script)
 2. Tạo file `.env` từ `.env.example` và điền những gì tôi cung cấp.
-3. Cài dependencies và chạy thử `python main.py`.
+3. Cài dependencies và chạy thử `python main.py`. Phải thấy
+   `Kiểm tra backend: OK` và `Kiểm tra model đọc ảnh: OK` — nếu bot từ chối
+   chạy thì làm theo đúng dòng lỗi nó in ra, đừng đoán.
 4. Xác nhận bot đã chạy, rồi nhắc tôi mở Telegram gõ `/start` để cấu hình
    danh mục chi tiêu.
-5. Sau khi tôi gõ `/start` xong, nhắc tôi gửi thử 1 ảnh biên lai và kiểm tra
-   Google Sheet có đúng 1 dòng mới.
+5. Sau khi tôi gõ `/start` xong, nhắc tôi gõ `/test` (phải ra 2 dòng ✅), rồi
+   gửi thử 1 ảnh biên lai và kiểm tra Google Sheet có đúng 1 dòng mới.
 
 Lưu ý cho bạn:
 - **Không** in token/API key ra màn hình hay vào file log.

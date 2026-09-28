@@ -25,7 +25,7 @@ from telegram.ext import (
 
 import keyboards as kb
 from anomaly import detect_anomaly
-from onboarding import Wizard, summary_text
+from onboarding import Wizard, config_text, summary_text
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +103,9 @@ class BotHandler:
         self.app.add_handler(CommandHandler("setup", self.cmd_setup))
         self.app.add_handler(CommandHandler("myid", self.cmd_myid))
         self.app.add_handler(CommandHandler("id", self.cmd_myid))
+        self.app.add_handler(CommandHandler("config", self.cmd_config))
+        self.app.add_handler(CommandHandler("test", self.cmd_test))
+        self.app.add_handler(CommandHandler("invite", self.cmd_invite))
         self.app.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
         self.app.add_handler(CallbackQueryHandler(self.handle_callback))
@@ -167,6 +170,80 @@ class BotHandler:
 
     async def cmd_myid(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"ID Telegram của bạn: `{update.effective_user.id}`", parse_mode="Markdown")
+
+    async def cmd_config(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._allowed(update):
+            if not self.config.data.get("admin_id"):
+                self.config.claim_admin(update.effective_user.id)
+            else:
+                await self._deny(update)
+                return
+        if not self.config.is_ready():
+            await update.message.reply_text("Chưa cấu hình. Gõ /start để làm 5 bước cấu hình.")
+            return
+        await update.message.reply_text(config_text(self.config) + "\nGõ /setup để sửa.")
+
+    async def cmd_test(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Chạy được ngay sau khi bot lên — thay cho việc đọc log."""
+        if not self._allowed(update):
+            if not self.config.data.get("admin_id"):
+                self.config.claim_admin(update.effective_user.id)
+            else:
+                await self._deny(update)
+                return
+        await update.message.reply_text("Đang kiểm tra kết nối, chờ vài giây…")
+        loop = asyncio.get_running_loop()
+        # Cả hai đều là HTTP — bỏ vào executor để không chặn bot
+        # xử lý tin nhắn của người khác trong lúc chờ Google trả lời.
+        backend_err = await loop.run_in_executor(None, self.backend.healthcheck)
+        ocr_err = await loop.run_in_executor(None, self.ocr.ping)
+
+        lines = [
+            "✅ Sổ (backend): OK" if not backend_err else f"❌ Sổ (backend): {backend_err}",
+            "✅ Model đọc ảnh: OK" if not ocr_err else f"❌ Model đọc ảnh: {ocr_err}",
+        ]
+        if not backend_err and not ocr_err:
+            lines += ["", "Tất cả ổn — gửi thử 1 ảnh biên lai để bắt đầu."]
+        await update.message.reply_text("\n".join(lines))
+
+    async def cmd_invite(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self.config.is_admin(update.effective_user.id):
+            await update.effective_message.reply_text("Chỉ admin mới được mời người khác.")
+            return
+        parts = (update.message.text or "").split(maxsplit=1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
+        if not arg:
+            await update.message.reply_text(
+                "Cách dùng: /invite 123456789\n"
+                "(Người kia gõ /myid để lấy số ID, rồi gửi cho bạn.)"
+            )
+            return
+
+        added, already, invalid = [], [], []
+        # Tách theo cả dấu phẩy lẫn khoảng trắng: "111, 222" và "111 222"
+        # đều phải hiểu là 2 người. Dùng parse_list của wizard sẽ dính 2 ID
+        # lại thành một số sai.
+        for item in arg.replace(",", " ").split():
+            digits = "".join(c for c in item if c.isdigit())
+            if not digits:
+                invalid.append(item)
+                continue
+            user_id = int(digits)
+            if self.config.add_user(user_id):
+                added.append(str(user_id))
+            else:
+                already.append(str(user_id))
+
+        lines = []
+        if added:
+            lines.append("✅ Đã thêm: " + ", ".join(added))
+        if already:
+            lines.append("Đã có sẵn từ trước: " + ", ".join(already))
+        if invalid:
+            lines.append("Bỏ qua (không phải số ID): " + ", ".join(invalid))
+        if not lines:
+            lines.append("Không nhận ra ID nào. Cách dùng: /invite 123456789")
+        await update.message.reply_text("\n".join(lines))
 
     # ── ảnh ─────────────────────────────────────────────────────
 
@@ -287,12 +364,20 @@ class BotHandler:
         txn = pending["txn"]
 
         if data == "confirm":
-            ok = await self._save(txn, pending["image"])
+            err = await self._save(txn, pending["image"])
+            if err:
+                # KHÔNG pop pending: giao dịch + ảnh phải sống sót để bấm thử
+                # lại được, và người dùng phải biết đúng chỗ cần sửa.
+                await query.edit_message_text(
+                    "❌ Chưa ghi vào sổ được.\n\n"
+                    f"Lý do: {err}\n\n"
+                    "Giao dịch vẫn còn ở đây — bấm Duyệt để thử lại, "
+                    "hoặc Bỏ qua nếu không cần lưu.",
+                    reply_markup=kb.confirm_kb(),
+                )
+                return
             ctx.user_data.pop("pending", None)
-            if ok:
-                await query.edit_message_text("✅ Đã ghi vào sổ.")
-            else:
-                await query.edit_message_text("❌ Ghi thất bại, kiểm tra log rồi thử lại.")
+            await query.edit_message_text("✅ Đã ghi vào sổ.")
             await self._drain(ctx, query.message.chat_id)
             return
 
@@ -410,9 +495,15 @@ class BotHandler:
         pending = ctx.user_data.get("pending")
         low = text.lower()
         if pending and low in SAVE_WORDS:
-            ok = await self._save(pending["txn"], pending["image"])
+            err = await self._save(pending["txn"], pending["image"])
+            if err:
+                await update.message.reply_text(
+                    f"❌ Chưa ghi vào sổ được.\nLý do: {err}\n\n"
+                    "Giao dịch vẫn còn — gửi `lưu` để thử lại, hoặc `bỏ qua`."
+                )
+                return
             ctx.user_data.pop("pending", None)
-            await update.message.reply_text("✅ Đã ghi vào sổ." if ok else "❌ Ghi thất bại.")
+            await update.message.reply_text("✅ Đã ghi vào sổ.")
             await self._drain(ctx, update.message.chat_id)
             return
         if pending and low in DROP_WORDS:
@@ -445,7 +536,8 @@ class BotHandler:
 
     # ── lưu ─────────────────────────────────────────────────────
 
-    async def _save(self, txn: dict, image_bytes: bytes | None) -> bool:
+    async def _save(self, txn: dict, image_bytes: bytes | None) -> str | None:
+        """Trả `None` nếu đã ghi vào sổ, ngược lại trả LÝ DO bằng tiếng Việt."""
         try:
             rows = self.backend.get_recent(limit=30)
             is_anomaly, reason = detect_anomaly(txn, rows)
@@ -455,7 +547,7 @@ class BotHandler:
             logger.debug("Anomaly check skipped: %s", e)
 
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, self.backend.append, txn, image_bytes)
-        if not result:
-            logger.error("Ghi thất bại: %s", str(txn.get("noi_dung"))[:60])
-        return bool(result)
+        err = await loop.run_in_executor(None, self.backend.append, txn, image_bytes)
+        if err:
+            logger.error("Ghi thất bại: %s | %s", str(txn.get("noi_dung"))[:60], err)
+        return err

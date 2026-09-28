@@ -1,8 +1,18 @@
 """Interface chung cho backend lưu giao dịch.
 
 Bot chỉ nói chuyện với backend qua interface này, nên thêm backend mới
-(CSV, SQLite, Notion…) không phải sửa `bot.py`. Ba việc bắt buộc:
-`append`, `get_recent`, `summarize_recent`.
+(CSV, SQLite, Notion…) không phải sửa `bot.py`. Bốn việc bắt buộc:
+`append`, `get_recent`, `summarize_recent`, `healthcheck`.
+
+Hợp đồng trả về cố ý khác nhau:
+
+- `append` trả **`None` nếu ghi được, ngược lại trả LÝ DO bằng tiếng Việt**.
+  Bot phải đọc được lý do để báo cho người dùng và GIỮ LẠI giao dịch chờ
+  thử lại — nếu trả `bool` thì người dùng chỉ thấy "kiểm tra log", mà họ
+  không đọc được log, và giao dịch bị mất.
+- `healthcheck` cũng trả `str | None`: `None` = kết nối tốt.
+- `get_recent` nuốt lỗi và trả `[]` (chỉ dùng để gợi ý câu hỏi, không phải
+  đường ghi dữ liệu).
 
 `build_row` và `detect_source` ở đây là phần dùng chung để hai backend
 không mỗi nơi map một kiểu — dữ liệu của người dùng chỉ có một nguồn.
@@ -147,8 +157,10 @@ def summarize_rows(rows: list[dict], max_items: int = 5) -> str:
 
 @runtime_checkable
 class Backend(Protocol):
-    def append(self, txn: dict, image_bytes: bytes | None = None) -> bool: ...
+    def append(self, txn: dict, image_bytes: bytes | None = None) -> str | None: ...
 
     def get_recent(self, limit: int = 10) -> list[dict]: ...
 
     def summarize_recent(self, rows: list[dict], max_items: int = 5) -> str: ...
+
+    def healthcheck(self) -> str | None: ...
