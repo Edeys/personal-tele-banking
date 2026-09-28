@@ -13,22 +13,25 @@ logger = logging.getLogger(__name__)
 
 SKIP_WORDS = {"xong", "skip", "bỏ qua", "bo qua", "-", "không", "khong"}
 
+# Tin nhắn wizard không dùng Markdown: tên nhóm/nguồn do user gõ có thể
+# chứa `*`/`_` làm hỏng parse khi được nhúng lại vào câu hỏi/summary.
+
 PROMPT_SOURCES = (
-    "Bước 1/5 — *Nguồn tiền*\n"
+    "Bước 1/5 — Nguồn tiền\n"
     "Nhập các nguồn tiền cách nhau dấu phẩy.\n"
-    "Ví dụ: `VCB - 046, MB - 259, Tiền mặt, MoMo`"
+    "Ví dụ: VCB - 046, MB - 259, Tiền mặt, MoMo"
 )
 
 PROMPT_GROUPS = (
-    "Bước 2/5 — *Nhóm chi tiêu*\n"
+    "Bước 2/5 — Nhóm chi tiêu\n"
     "Nhập các nhóm lớn cách nhau dấu phẩy.\n"
-    "Ví dụ: `Ăn uống, Gia đình, Kinh doanh, Lương`"
+    "Ví dụ: Ăn uống, Gia đình, Kinh doanh, Lương"
 )
 
 PROMPT_INCOME = (
-    "Bước 3/5 — *Nhóm nào là THU NHẬP?*\n"
+    "Bước 3/5 — Nhóm nào là THU NHẬP?\n"
     "Chọn đúng tên trong danh sách trên, cách nhau dấu phẩy.\n"
-    "Gõ `xong` nếu tất cả đều là chi tiêu."
+    "Gõ xong nếu tất cả đều là chi tiêu."
 )
 
 
@@ -73,9 +76,9 @@ class Wizard:
     def _prompt_subs(self) -> str:
         group = self.data["groups"][self.data["idx"]]
         return (
-            f"Bước 4/5 — *Hạng mục con của «{group}»*\n"
-            "Nhập cách nhau dấu phẩy, hoặc gõ `xong` để bỏ qua.\n"
-            f"Ví dụ cho «{group}»: `Mục 1, Mục 2`"
+            f"Bước 4/5 — Hạng mục con của «{group}»\n"
+            "Nhập cách nhau dấu phẩy, hoặc gõ xong để bỏ qua.\n"
+            f"Ví dụ cho «{group}»: Mục 1, Mục 2"
         )
 
     def feed(self, text: str) -> tuple[bool, str]:
@@ -116,9 +119,9 @@ class Wizard:
                 return False, self._prompt_subs()
             self.data["step"] = "family"
             return False, (
-                "Bước 5/5 — *Thành viên*\n"
+                "Bước 5/5 — Thành viên\n"
                 "Gửi ID Telegram của người dùng chung (họ gõ /myid để lấy), "
-                "cách nhau dấu phẩy. Gõ `xong` nếu chỉ mình bạn."
+                "cách nhau dấu phẩy. Gõ xong nếu chỉ mình bạn."
             )
 
         if step == "family":
@@ -154,17 +157,17 @@ class Wizard:
 
 
 def summary_text(config) -> str:
-    lines = ["✅ *Đã lưu cấu hình!*", ""]
-    lines.append("*Nguồn tiền:* " + (", ".join(config.sources) or "(chưa có)"))
+    lines = ["✅ Đã lưu cấu hình!", ""]
+    lines.append("Nguồn tiền: " + (", ".join(config.sources) or "(chưa có)"))
     lines.append("")
-    lines.append("*Nhóm chi tiêu:*")
+    lines.append("Nhóm chi tiêu:")
     for group, subs in config.categories.items():
         tag = " (thu nhập)" if config.is_income(group) else ""
         sub_text = ", ".join(subs) if subs else "—"
         lines.append(f"• {group}{tag}: {sub_text}")
     if config.family:
         lines.append("")
-        lines.append("*Thành viên:* " + ", ".join(str(m.get("id")) for m in config.family))
+        lines.append("Thành viên: " + ", ".join(str(m.get("id")) for m in config.family))
     lines.append("")
     lines.append("Giờ gửi ảnh biên lai / màn hình chuyển khoản để bắt đầu.")
     return "\n".join(lines)

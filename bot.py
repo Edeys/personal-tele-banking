@@ -96,6 +96,9 @@ class BotHandler:
         )
         self.chat_model = llm_config.get("chat_model", "gpt-4o-mini")
         self.name = name
+        # Wizard không nằm trong user_data: nó giữ tham chiếu Config (có
+        # threading.Lock) nên PicklePersistence không serialize được.
+        self._wizards: dict[int, Wizard] = {}
         self._register()
 
     def _register(self) -> None:
@@ -123,11 +126,12 @@ class BotHandler:
             f"ID Telegram của bạn: `{user.id}` — gửi cho chủ bot nếu muốn được thêm."
         )
 
-    def _wizard(self, ctx: ContextTypes.DEFAULT_TYPE) -> Wizard:
-        wizard = ctx.user_data.get("_wizard_obj")
+    def _wizard(self, update: Update) -> Wizard:
+        uid = update.effective_user.id if update.effective_user else 0
+        wizard = self._wizards.get(uid)
         if wizard is None or not wizard.active:
             wizard = Wizard(self.config)
-            ctx.user_data["_wizard_obj"] = wizard
+            self._wizards[uid] = wizard
         return wizard
 
     async def _run_ocr(self, image_bytes: bytes) -> dict:
@@ -145,28 +149,34 @@ class BotHandler:
                 return
 
         if not self.config.is_ready():
-            wizard = self._wizard(ctx)
+            if not self.config.is_admin(update.effective_user.id):
+                await update.message.reply_text(
+                    "Bot chưa được cấu hình — nhờ chủ bot (admin) gõ /start làm 5 bước trước đã."
+                )
+                return
+            wizard = self._wizard(update)
             await update.message.reply_text(
-                "Chào bạn! Cùng cấu hình bot trong 2 phút.", reply_markup=None
+                "Chào bạn! Cùng cấu hình bot trong 2 phút."
             )
-            await update.message.reply_text(wizard.open(), parse_mode="Markdown")
+            await update.message.reply_text(wizard.open())
             return
 
         await update.message.reply_text(
-            f"*{self.config.bot_name}* đã sẵn sàng.\n"
-            "- Gửi **ảnh** biên lai / màn hình chuyển khoản → bot đọc và hỏi xác nhận\n"
-            "- Gửi **tin nhắn** → hỏi về chi tiêu\n"
-            "- `/setup` → sửa cấu hình\n"
-            "- `/myid` → xem ID Telegram\n",
-            parse_mode="Markdown",
+            f"{self.config.bot_name} đã sẵn sàng.\n"
+            "- Gửi ảnh biên lai / màn hình chuyển khoản → bot đọc và hỏi xác nhận\n"
+            "- Gửi tin nhắn → hỏi về chi tiêu\n"
+            "- /setup → sửa cấu hình\n"
+            "- /myid → xem ID Telegram\n",
         )
 
     async def cmd_setup(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        if not self._allowed(update):
-            await self._deny(update)
+        if not self.config.is_admin(update.effective_user.id):
+            await update.effective_message.reply_text(
+                "Chỉ admin mới được sửa cấu hình. Gõ /myid để lấy ID rồi nhờ chủ bot."
+            )
             return
-        wizard = self._wizard(ctx)
-        await update.message.reply_text(wizard.open(), parse_mode="Markdown")
+        wizard = self._wizard(update)
+        await update.message.reply_text(wizard.open())
 
     async def cmd_myid(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"ID Telegram của bạn: `{update.effective_user.id}`", parse_mode="Markdown")
@@ -260,8 +270,13 @@ class BotHandler:
             queue = ctx.user_data.setdefault("queue", [])
             queue.append({"image": image_bytes, "caption": (update.message.caption or "").strip()})
             total = len(queue)
-            if ctx.user_data.get("processing"):
-                await update.message.reply_text(f"Đã xếp hàng ảnh #{total}, đang xử lý dần…")
+            # Đang OCR ảnh khác, hoặc đang chờ user xác nhận giao dịch trước
+            # → chỉ xếp hàng, tuyệt đối không drain: drain sẽ ghi đè `pending`
+            # và nút Duyệt của ảnh cũ sẽ lưu nhầm dữ liệu ảnh mới.
+            if ctx.user_data.get("processing") or ctx.user_data.get("pending"):
+                await update.message.reply_text(
+                    f"Đã xếp hàng ảnh #{total} — bot đọc tiếp sau khi bạn xử lý xong ảnh đang mở."
+                )
                 return
             await self._drain(ctx, update.message.chat_id)
         except Exception as e:
@@ -273,7 +288,10 @@ class BotHandler:
             return
         ctx.user_data["processing"] = True
         try:
-            while ctx.user_data.get("queue"):
+            # Xử lý tuần tự: dừng ngay khi có `pending` để màn xác nhận của
+            # ảnh trước không bị ảnh sau ghi đè. Sau khi user Duyệt/Bỏ qua,
+            # handle_callback gọi lại _drain để đọc ảnh kế tiếp.
+            while ctx.user_data.get("queue") and not ctx.user_data.get("pending"):
                 entry = ctx.user_data["queue"].pop(0)
                 image_bytes = entry["image"]
                 caption = entry.get("caption", "")
@@ -351,7 +369,12 @@ class BotHandler:
                 await query.edit_message_text("Ảnh đã hết hạn, gửi lại ảnh nhé.")
                 return
             ctx.user_data.setdefault("queue", []).insert(0, failed)
-            await query.edit_message_text("Đang đọc lại…")
+            if ctx.user_data.get("pending"):
+                await query.edit_message_text(
+                    "Đã xếp hàng — bot đọc lại sau khi bạn xử lý xong ảnh đang mở."
+                )
+            else:
+                await query.edit_message_text("Đang đọc lại…")
             await self._drain(ctx, query.message.chat_id)
             return
 
@@ -478,14 +501,15 @@ class BotHandler:
         if not text:
             return
 
-        wizard = self._wizard(ctx)
+        wizard = self._wizard(update)
         if wizard.active:
             done, reply = wizard.feed(text)
             if done:
-                await update.message.reply_text(reply, parse_mode="Markdown")
+                self._wizards.pop(update.effective_user.id, None)
+                await update.message.reply_text(reply)
                 self.ocr.refresh_prompt()
             else:
-                await update.message.reply_text(reply, parse_mode="Markdown")
+                await update.message.reply_text(reply)
             return
 
         if not self.config.is_ready():
@@ -538,15 +562,15 @@ class BotHandler:
 
     async def _save(self, txn: dict, image_bytes: bytes | None) -> str | None:
         """Trả `None` nếu đã ghi vào sổ, ngược lại trả LÝ DO bằng tiếng Việt."""
+        loop = asyncio.get_running_loop()
         try:
-            rows = self.backend.get_recent(limit=30)
+            rows = await loop.run_in_executor(None, self.backend.get_recent, 30)
             is_anomaly, reason = detect_anomaly(txn, rows)
             if is_anomaly:
                 logger.info("Bất thường: %s", reason)
         except Exception as e:
             logger.debug("Anomaly check skipped: %s", e)
 
-        loop = asyncio.get_running_loop()
         err = await loop.run_in_executor(None, self.backend.append, txn, image_bytes)
         if err:
             logger.error("Ghi thất bại: %s | %s", str(txn.get("noi_dung"))[:60], err)
