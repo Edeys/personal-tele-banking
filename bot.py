@@ -315,7 +315,11 @@ class BotHandler:
                 if txn.get("loai") == "shoppe":
                     self._sum_shoppe(txn)
 
-                ctx.user_data["pending"] = {"txn": txn, "image": image_bytes}
+                ctx.user_data["pending"] = {
+                    "txn": txn,
+                    "image": image_bytes,
+                    "msg_id": status.message_id,
+                }
                 await status.edit_text(
                     format_txn(txn, self.config), reply_markup=kb.confirm_kb()
                 )
@@ -382,6 +386,14 @@ class BotHandler:
             if data == "noop":
                 return
             await query.edit_message_text("Phiên đã hết, gửi lại ảnh nhé.")
+            return
+
+        # Nút bấm của một màn xác nhận cũ (ví dụ pending đã được chốt bằng
+        # tin nhắn "lưu", queue đã chuyển sang biên lai khác) phải bị vô hiệu —
+        # nếu không nó sẽ Duyệt/Bỏ qua nhầm giao dịch đang chờ hiện tại.
+        expected = pending.get("msg_id")
+        if expected is not None and query.message.message_id != expected:
+            await query.answer("Màn xác nhận này đã xử lý xong.")
             return
 
         txn = pending["txn"]
@@ -527,16 +539,31 @@ class BotHandler:
                 )
                 return
             ctx.user_data.pop("pending", None)
+            await self._drop_confirm_kb(ctx, update.message.chat_id, pending)
             await update.message.reply_text("✅ Đã ghi vào sổ.")
             await self._drain(ctx, update.message.chat_id)
             return
         if pending and low in DROP_WORDS:
             ctx.user_data.pop("pending", None)
+            await self._drop_confirm_kb(ctx, update.message.chat_id, pending)
             await update.message.reply_text("Đã bỏ qua giao dịch này.")
             await self._drain(ctx, update.message.chat_id)
             return
 
         await self._chat(update, ctx, text)
+
+    async def _drop_confirm_kb(self, ctx, chat_id: int, pending: dict) -> None:
+        # Chốt giao dịch bằng tin nhắn thường không đụng tới màn có nút → phải
+        # tháo keyboard đi, kẻo nút cũ còn sống và tác động nhầm pending kế tiếp.
+        msg_id = pending.get("msg_id")
+        if not msg_id:
+            return
+        try:
+            await ctx.bot.edit_message_reply_markup(
+                chat_id=chat_id, message_id=msg_id, reply_markup=None
+            )
+        except Exception:
+            pass
 
     async def _chat(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: str) -> None:
         thinking = await update.message.reply_text("Đang xem…")
