@@ -1,0 +1,28 @@
+# Secrets & credentials
+.env
+*.key
+*.pem
+credentials*.json
+*service_account*.json
+
+# Runtime artifacts
+__pycache__/
+venv/
+.venv/
+*.pyc
+.pytest_cache/
+
+# Runtime data (user-created qua wizard)
+data/config.json
+receipts/
+*.pkl
+
+# Debug images
+debug_*.jpg
+debug_*.png
+
+# Local overrides
+config_local.yaml
+bot_local.log
+*.private.md
+AGENTS.private.md
